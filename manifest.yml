@@ -1,0 +1,48 @@
+# Synapse - AI Meeting Analysis Tool for Atlassian Forge
+modules:
+  jira:issuePanel:
+    - key: synapse-main-panel
+      title: "🧠 Synapse - AI Meeting Analysis"
+      icon: "https://via.placeholder.com/16x16.png"
+      resource: main-app
+      resolver:
+        function: analysis-resolver
+
+  function:
+    - key: analysis-resolver
+      handler: index.mainHandler
+
+resources:
+  - key: main-app
+    path: static/main-app/build
+
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+    - read:jira-user
+    - storage:app
+  content:
+    styles:
+      - unsafe-inline
+    scripts:
+      - unsafe-inline
+      - unsafe-eval
+  external:
+    scripts:
+      - https://unpkg.com
+      - https://cdnjs.cloudflare.com
+      - https://connect-cdn.atl-paas.net
+      - "*.cloudfront.net"
+    styles:
+      - "*.cloudfront.net"
+    fetch:
+      client:
+        - api.anthropic.com
+      backend:
+        - api.anthropic.com
+
+app:
+  runtime:
+    name: nodejs22.x
+  id: ari:cloud:ecosystem::app/58c14000-d424-454a-b817-054e05164ca9

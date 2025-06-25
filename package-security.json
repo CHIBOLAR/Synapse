@@ -1,0 +1,13 @@
+{
+  "name": "synapse-security-audit",
+  "version": "1.0.0", 
+  "type": "module",
+  "dependencies": {
+    "dompurify": "^3.0.5",
+    "validator": "^13.11.0", 
+    "lodash": "^4.17.21"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

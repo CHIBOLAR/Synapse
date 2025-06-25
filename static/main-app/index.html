@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0052CC" />
+    <meta name="description" content="Synapse - AI-powered meeting analysis tool for Atlassian Jira" />
+    
+    <title>🧠 Synapse - AI Meeting Analysis</title>
+    
+    <!-- Using system fonts for Forge compliance -->
+    <!-- Google Fonts removed to eliminate external URL dependencies -->
+    
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
+    
+    <!-- Preload critical resources -->
+    <link rel="preload" href="./src/styles/App.css" as="style">
+    
+    
+    <style>
+        /* Critical CSS for initial load */
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+                         'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        
+        #root {
+            min-height: 100vh;
+        }
+        
+        /* Loading spinner for initial load */
+        .initial-loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            flex-direction: column;
+            color: white;
+        }
+        
+        .initial-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 1rem;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .loading-text {
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <noscript>
+        <div style="text-align: center; padding: 2rem; background: white; margin: 2rem; border-radius: 8px;">
+            <h2>🚨 JavaScript Required</h2>
+            <p>Synapse requires JavaScript to be enabled in your browser.</p>
+            <p>Please enable JavaScript and refresh the page.</p>
+        </div>
+    </noscript>
+    
+    <div id="root">
+        <!-- Initial loading state -->
+        <div class="initial-loading">
+            <div class="initial-spinner"></div>
+            <div class="loading-text">Loading Synapse...</div>
+        </div>
+    </div>
+    
+    <!-- React application will mount here -->
+    
+    <!-- Load React and application bundle -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Forge Bridge for Atlassian integration -->
+    <script src="https://connect-cdn.atl-paas.net/all.js"></script>
+    
+    <!-- Application entry point -->
+    <script type="module" src="./src/index.jsx"></script>
+    
+    <!-- Performance monitoring script -->
+    <script>
+        // Basic performance tracking
+        window.addEventListener('load', function() {
+            const loadTime = performance.now();
+            console.log('Synapse loaded in', Math.round(loadTime), 'ms');
+            
+            // Remove initial loading state
+            const initialLoading = document.querySelector('.initial-loading');
+            if (initialLoading) {
+                initialLoading.style.display = 'none';
+            }
+        });
+        
+        // Error boundary for uncaught errors
+        window.addEventListener('error', function(event) {
+            console.error('Synapse Error:', event.error);
+            // TODO: Send to error tracking service
+        });
+    </script>
+</body>
+</html>

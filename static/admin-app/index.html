@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0052CC" />
+    <meta name="description" content="Synapse Admin - AI Meeting Analysis Configuration" />
+    
+    <title>🔧 Synapse Admin</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔧</text></svg>">
+    
+    <!-- Security headers for Forge compliance -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self';">
+    
+    <style>
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+                         'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+            background: #f4f5f7;
+            min-height: 100vh;
+        }
+        
+        #root {
+            min-height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <noscript>
+        <div style="text-align: center; padding: 2rem; background: white; margin: 2rem; border-radius: 8px;">
+            <h2>🚨 JavaScript Required</h2>
+            <p>Synapse Admin requires JavaScript to be enabled in your browser.</p>
+            <p>Please enable JavaScript and refresh the page.</p>
+        </div>
+    </noscript>
+    
+    <div id="root"></div>
+    
+    <!-- Forge Bridge for Atlassian integration -->
+    <script src="https://connect-cdn.atl-paas.net/all.js"></script>
+    
+    <!-- React Application Bundle -->
+    <script src="./build/bundle.js"></script>
+</body>
+</html>

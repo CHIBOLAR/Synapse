@@ -1,0 +1,128 @@
+{
+  "name": "synapse-meeting-analyzer",
+  "version": "1.0.0",
+  "description": "AI-powered meeting analysis tool with Claude Sonnet 4 and native Jira integration",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "build": "npm run build:frontend && npm run build:admin",
+    "build:frontend": "cd static/main-app && npm install && npm run build",
+    "build:admin": "cd static/admin-app && npm install && npm run build",
+    "dev": "forge tunnel",
+    "dev:frontend": "cd static/main-app && npm run dev",
+    "dev:admin": "cd static/admin-panel && npm run dev",
+    "deploy": "npm run build && forge deploy",
+    "deploy:staging": "npm run build && forge deploy -e staging",
+    "deploy:prod": "npm run build && forge deploy -e production",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:unit": "jest tests/unit",
+    "test:integration": "jest tests/integration",
+    "test:e2e": "jest tests/e2e",
+    "test:security": "jest tests/security",
+    "test:performance": "jest tests/performance",
+    "test:coverage": "jest --coverage",
+    "test:ci": "jest --ci --coverage --watchAll=false",
+    "lint": "eslint src/ static/ --ext .js,.jsx",
+    "lint:fix": "eslint src/ static/ --ext .js,.jsx --fix",
+    "format": "prettier --write \"src/**/*.{js,jsx}\" \"static/**/*.{js,jsx}\"",
+    "security": "npm run security:full && npm run security:audit",
+    "security:full": "node tests/security/runSecurityAudit.js",
+    "security:audit": "npm audit --audit-level=moderate",
+    "benchmark": "node scripts/performance-benchmark.js",
+    "docs:generate": "jsdoc src/ -d docs/api/",
+    "clean": "rm -rf node_modules static/*/node_modules static/*/build",
+    "setup": "npm install && npm run build:frontend && npm run build:admin",
+    "start": "npm run deploy && npm run dev"
+  },
+  "keywords": [
+    "atlassian",
+    "forge",
+    "jira",
+    "ai",
+    "claude",
+    "meeting-analysis",
+    "productivity"
+  ],
+  "author": "Synapse Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.54.0",
+    "@forge/api": "^3.0.0",
+    "@forge/bridge": "^3.0.0",
+    "@forge/resolver": "^1.6.13",
+    "crypto-js": "^4.1.1",
+    "dompurify": "^3.0.5",
+    "lodash": "^4.17.21",
+    "validator": "^13.11.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@jest/globals": "^29.7.0",
+    "@testing-library/jest-dom": "^6.0.0",
+    "@testing-library/react": "^14.0.0",
+    "@testing-library/user-event": "^14.5.0",
+    "@types/node": "^20.0.0",
+    "eslint": "^9.0.0",
+    "eslint-plugin-react": "^7.33.0",
+    "eslint-plugin-security": "^3.0.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "nock": "^13.3.0",
+    "playwright": "^1.40.0",
+    "prettier": "^3.0.0",
+    "supertest": "^6.3.0"
+  },
+  "eslintConfig": {
+    "env": {
+      "browser": true,
+      "es2022": true,
+      "node": true,
+      "jest": true
+    },
+    "extends": [
+      "eslint:recommended",
+      "plugin:react/recommended",
+      "plugin:security/recommended"
+    ],
+    "parserOptions": {
+      "ecmaVersion": "latest",
+      "sourceType": "module",
+      "ecmaFeatures": {
+        "jsx": true
+      }
+    },
+    "plugins": [
+      "react",
+      "security"
+    ],
+    "rules": {
+      "security/detect-object-injection": "error",
+      "security/detect-eval-with-expression": "error",
+      "react/prop-types": "warn",
+      "no-console": "warn",
+      "no-debugger": "error",
+      "prefer-const": "error"
+    }
+  },
+  "prettier": {
+    "semi": true,
+    "trailingComma": "es5",
+    "singleQuote": true,
+    "printWidth": 80,
+    "tabWidth": 2,
+    "useTabs": false
+  },
+  "repository": {
+    "type": "git",
+    "url": "internal"
+  },
+  "bugs": {
+    "url": "internal"
+  },
+  "homepage": "internal"
+}
