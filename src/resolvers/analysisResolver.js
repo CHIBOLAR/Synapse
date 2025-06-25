@@ -419,7 +419,8 @@ export class AnalysisResolver {
     return `analysis_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
-  // === ENHANCED EXISTING METHOD ===  async handleFileUpload(payload, context) {
+  // === ENHANCED EXISTING METHOD ===
+  async handleFileUpload(payload, context) {
     try {
       this.securityService.validateUserContext(context);
       
