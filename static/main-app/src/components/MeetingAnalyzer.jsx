@@ -1,351 +1,764 @@
-import React, { useState, useCallback, useRef } from 'react';
-import { invoke } from '@forge/bridge';
-import FileUploader from './FileUploader';
-import AnalysisResults from './AnalysisResults';
-import ProcessingStatus from './ProcessingStatus';
-import MeetingTypeSelector from './MeetingTypeSelector';
-
 /**
- * 🎯 SYNAPSE - Meeting Analyzer Component
+ * 📊 ENHANCED MEETING ANALYZER COMPONENT
  * 
- * Core functionality for AI-powered meeting analysis
- * Integrates with Claude Sonnet 4 for intelligent issue extraction
- * 
- * Features:
- * - File upload (.txt, .docx) with validation
- * - Real-time processing status with queue management
- * - Context-aware analysis (6 meeting types × 5 issue types)
- * - Confidence scoring and quality metrics
- * - Direct Jira issue creation
- * - Performance tracking and optimization
+ * Meeting analysis component with comprehensive logging and error detection
  */
 
-const MeetingAnalyzer = ({ 
-  userConfig, 
-  addNotification, 
-  updatePerformanceMetrics, 
-  performanceMetrics 
-}) => {
-  // 📋 Component State
-  const [analysisState, setAnalysisState] = useState('idle'); // idle, uploading, processing, completed, error
-  const [uploadedFile, setUploadedFile] = useState(null);
+import React, { useState, useEffect } from 'react';
+import { invoke } from '@forge/bridge';
+import frontendLogger, { trackBridge, trackComponent } from '../utils/frontendLogger';
+
+const MeetingAnalyzer = ({ userConfig, addNotification, backendHealth }) => {
+  trackComponent('MeetingAnalyzer', 'component-start');
+
+  // Component state
+  const [content, setContent] = useState('');
   const [meetingType, setMeetingType] = useState('general');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResults, setAnalysisResults] = useState(null);
-  const [processingStatus, setProcessingStatus] = useState(null);
-  const [analysisMetrics, setAnalysisMetrics] = useState({});
-  
-  // 🔄 Refs for performance tracking
-  const analysisStartTime = useRef(null);
-  const processingQueue = useRef(null);
+  const [analysisId, setAnalysisId] = useState(null);
+  const [validationStatus, setValidationStatus] = useState(null);
+  const [processingLog, setProcessingLog] = useState([]);
 
-  /**
-   * Handle file upload completion
-   */
-  const handleFileUpload = useCallback(async (file, fileContent) => {
-    try {
-      setAnalysisState('uploading');
-      setUploadedFile({ file, content: fileContent });
-      
-      // Validate file content
-      const validation = await validateFileContent(fileContent);
-      if (!validation.isValid) {
-        throw new Error(validation.error);
-      }
-
-      setAnalysisState('ready');
-      addNotification('File uploaded successfully', 'success');
-      
-      updatePerformanceMetrics({
-        lastFileUpload: new Date().toISOString(),
-        fileSize: file.size,
-        fileName: file.name
+  useEffect(() => {
+    trackComponent('MeetingAnalyzer', 'mounted');
+    
+    // Set default meeting type from user config
+    if (userConfig?.config?.preferences?.defaultMeetingType) {
+      setMeetingType(userConfig.config.preferences.defaultMeetingType);
+      frontendLogger.component('📊 Default meeting type set from user config', {
+        meetingType: userConfig.config.preferences.defaultMeetingType
       });
-
-    } catch (error) {
-      console.error('File upload failed:', error);
-      setAnalysisState('error');
-      addNotification(`Upload failed: ${error.message}`, 'error');
     }
-  }, [addNotification, updatePerformanceMetrics]);
 
-  /**
-   * Validate uploaded file content
-   */  const validateFileContent = async (content) => {
+    return () => {
+      trackComponent('MeetingAnalyzer', 'unmounted');
+    };
+  }, [userConfig]);
+
+  const addToProcessingLog = (message, type = 'info') => {
+    const logEntry = {
+      id: Date.now() + Math.random(),
+      message,
+      type,
+      timestamp: new Date().toISOString()
+    };
+    
+    setProcessingLog(prev => [...prev, logEntry]);
+    frontendLogger.component(`📝 Processing log: ${message}`, { type, logEntry });
+  };
+
+  const validateContent = async () => {
+    if (!content || content.trim().length === 0) {
+      setValidationStatus({ valid: false, error: 'No content provided' });
+      return false;
+    }
+
+    addToProcessingLog('🔍 Validating content...', 'info');
+    
     try {
-      // Basic content validation
-      if (!content || content.trim().length < 50) {
-        return { isValid: false, error: 'File content too short. Minimum 50 characters required.' };
+      const tracker = trackBridge('validateContent', { contentLength: content.length });
+      const validation = await invoke('validateContent', { content });
+      tracker.complete(validation);
+      
+      if (validation.success) {
+        setValidationStatus({ 
+          valid: true, 
+          contentLength: validation.contentLength,
+          wordCount: validation.wordCount 
+        });
+        addToProcessingLog(`✅ Content validated (${validation.contentLength} chars, ${validation.wordCount || 'unknown'} words)`, 'success');
+        return true;
+      } else {
+        setValidationStatus({ valid: false, error: validation.error });
+        addToProcessingLog(`❌ Validation failed: ${validation.error}`, 'error');
+        return false;
       }
-
-      if (content.length > 500000) { // 500KB limit
-        return { isValid: false, error: 'File too large. Maximum 500KB allowed.' };
-      }
-
-      // Security validation through backend
-      const securityCheck = await invoke('validateContent', { content });
-      if (!securityCheck.isValid) {
-        return { isValid: false, error: 'Content failed security validation' };
-      }
-
-      return { isValid: true };
     } catch (error) {
-      return { isValid: false, error: 'Validation failed' };
+      frontendLogger.error('❌ Content validation error', {
+        error: error.message,
+        contentLength: content.length
+      });
+      setValidationStatus({ valid: false, error: error.message });
+      addToProcessingLog(`❌ Validation error: ${error.message}`, 'error');
+      return false;
     }
   };
 
-  /**
-   * Start analysis process
-   */
-  const handleStartAnalysis = useCallback(async () => {
-    if (!uploadedFile || analysisState !== 'ready') return;
+  const startAnalysis = async () => {
+    trackComponent('MeetingAnalyzer', 'analysis-start', { 
+      contentLength: content.length, 
+      meetingType 
+    });
+
+    addToProcessingLog('🚀 Starting analysis process...', 'info');
+    
+    if (!(await validateContent())) {
+      addNotification('❌ Content validation failed', 'error');
+      return;
+    }
+
+    setIsAnalyzing(true);
+    setAnalysisResults(null);
+    setAnalysisId(null);
 
     try {
-      setAnalysisState('processing');
-      analysisStartTime.current = Date.now();
+      addToProcessingLog('📤 Sending content to backend...', 'info');
       
-      // Initialize processing status
-      setProcessingStatus({
-        stage: 'initializing',
-        progress: 0,
-        message: 'Preparing analysis with Claude Sonnet 4...',
-        startTime: new Date().toISOString()
+      const tracker = trackBridge('startAnalysis', { 
+        contentLength: content.length, 
+        meetingType 
       });
-
-      // Submit analysis request
-      const analysisRequest = {
-        content: uploadedFile.content,
-        meetingType,
-        fileName: uploadedFile.file.name,
-        userPreferences: userConfig?.analysisPreferences || {},
-        timestamp: new Date().toISOString()
-      };
-
-      const analysisResponse = await invoke('startAnalysis', analysisRequest);
       
-      if (analysisResponse.success) {
-        processingQueue.current = analysisResponse.queueId;
-        addNotification('Analysis started successfully', 'success');
-        
-        // Start polling for status updates
-        pollAnalysisStatus(analysisResponse.queueId);
-      } else {
-        throw new Error(analysisResponse.error || 'Failed to start analysis');
-      }
+      const response = await invoke('startAnalysis', {
+        content,
+        meetingType
+      });
+      
+      tracker.complete(response);
 
+      if (response.success) {
+        setAnalysisId(response.analysisId);
+        addToProcessingLog(`✅ Analysis started (ID: ${response.analysisId})`, 'success');
+        addNotification('✅ Analysis started successfully', 'success');
+        
+        // Start polling for results
+        pollAnalysisStatus(response.analysisId);
+      } else {
+        throw new Error(response.error || 'Analysis failed to start');
+      }
     } catch (error) {
-      console.error('Analysis start failed:', error);
-      setAnalysisState('error');
-      setProcessingStatus(null);
-      addNotification(`Analysis failed: ${error.message}`, 'error');
+      frontendLogger.error('❌ Analysis start failed', {
+        error: error.message,
+        contentLength: content.length,
+        meetingType
+      });
+      
+      addToProcessingLog(`❌ Analysis failed: ${error.message}`, 'error');
+      addNotification(`❌ Analysis failed: ${error.message}`, 'error');
+      setIsAnalyzing(false);
+      trackComponent('MeetingAnalyzer', 'analysis-failed', { error: error.message });
     }
-  }, [uploadedFile, meetingType, userConfig, addNotification]);
-  /**
-   * Poll for analysis status updates
-   */
-  const pollAnalysisStatus = useCallback(async (queueId) => {
-    const pollInterval = 2000; // 2 seconds
-    const maxPollTime = 300000; // 5 minutes
-    const startTime = Date.now();
+  };
+
+  const pollAnalysisStatus = async (id) => {
+    const maxAttempts = 30; // 30 attempts = 30 seconds
+    let attempts = 0;
 
     const poll = async () => {
       try {
-        if (Date.now() - startTime > maxPollTime) {
-          throw new Error('Analysis timeout - please try again');
-        }
+        attempts++;
+        addToProcessingLog(`🔄 Checking status (attempt ${attempts}/${maxAttempts})...`, 'info');
+        
+        const tracker = trackBridge('getAnalysisStatus', { analysisId: id });
+        const statusResponse = await invoke('getAnalysisStatus', { analysisId: id });
+        tracker.complete(statusResponse);
 
-        const status = await invoke('getAnalysisStatus', { queueId });
+        if (statusResponse.success) {
+          const { status, progress, results } = statusResponse;
+          
+          addToProcessingLog(`📊 Status: ${status} (${progress || 0}%)`, 'info');
 
-        // Update processing status
-        setProcessingStatus({
-          stage: status.stage,
-          progress: status.progress,
-          message: status.message,
-          estimatedTimeRemaining: status.estimatedTimeRemaining,
-          details: status.details
-        });
-
-        if (status.completed) {
-          // Analysis completed successfully
-          const results = await invoke('getAnalysisResults', { queueId });
-          handleAnalysisComplete(results);
-        } else if (status.failed) {
-          throw new Error(status.error || 'Analysis failed');
+          if (status === 'completed' && results) {
+            setAnalysisResults(results);
+            setIsAnalyzing(false);
+            addToProcessingLog('🎉 Analysis completed successfully!', 'success');
+            addNotification('🎉 Analysis completed!', 'success');
+            trackComponent('MeetingAnalyzer', 'analysis-completed', { 
+              analysisId: id,
+              resultsCount: Object.keys(results).length 
+            });
+            return;
+          } else if (status === 'failed') {
+            throw new Error('Analysis failed on backend');
+          } else if (status === 'processing' && attempts < maxAttempts) {
+            // Continue polling
+            setTimeout(poll, 1000);
+          } else if (attempts >= maxAttempts) {
+            throw new Error('Analysis timeout - taking too long');
+          }
         } else {
-          // Continue polling
-          setTimeout(poll, pollInterval);
+          throw new Error(statusResponse.error || 'Status check failed');
         }
-
       } catch (error) {
-        console.error('Status polling failed:', error);
-        setAnalysisState('error');
-        setProcessingStatus(null);
-        addNotification(`Analysis failed: ${error.message}`, 'error');
+        frontendLogger.error('❌ Analysis polling error', {
+          error: error.message,
+          analysisId: id,
+          attempts
+        });
+        
+        addToProcessingLog(`❌ Status check failed: ${error.message}`, 'error');
+        setIsAnalyzing(false);
+        addNotification(`❌ Analysis failed: ${error.message}`, 'error');
+        trackComponent('MeetingAnalyzer', 'analysis-polling-failed', { 
+          error: error.message, 
+          attempts 
+        });
       }
     };
 
     poll();
-  }, [addNotification]);
+  };
 
-  /**
-   * Handle analysis completion
-   */
-  const handleAnalysisComplete = useCallback((results) => {
-    const analysisTime = Date.now() - analysisStartTime.current;
+  const processDirectText = async () => {
+    trackComponent('MeetingAnalyzer', 'direct-processing-start');
     
-    setAnalysisResults(results);
-    setAnalysisState('completed');
-    setProcessingStatus(null);
+    if (!(await validateContent())) {
+      addNotification('❌ Content validation failed', 'error');
+      return;
+    }
 
-    // Calculate and store metrics
-    const metrics = {
-      analysisTime,
-      issuesFound: results.issues?.length || 0,
-      confidence: results.confidence || 0,
-      meetingType,
-      completedAt: new Date().toISOString()
-    };
+    setIsAnalyzing(true);
+    addToProcessingLog('⚡ Processing text directly...', 'info');
 
-    setAnalysisMetrics(metrics);
-    updatePerformanceMetrics({
-      lastAnalysis: new Date().toISOString(),
-      averageAnalysisTime: analysisTime,
-      totalAnalyses: (performanceMetrics.totalAnalyses || 0) + 1,
-      ...metrics
-    });
+    try {
+      const tracker = trackBridge('processDirectText', { 
+        contentLength: content.length, 
+        meetingType 
+      });
+      
+      const response = await invoke('processDirectText', {
+        content,
+        meetingType
+      });
+      
+      tracker.complete(response);
 
-    addNotification(
-      `Analysis completed! Found ${metrics.issuesFound} issues in ${(analysisTime / 1000).toFixed(1)}s`,
-      'success'
-    );
-  }, [meetingType, updatePerformanceMetrics, performanceMetrics, addNotification]);
-  /**
-   * Reset analysis state for new file
-   */
-  const handleReset = useCallback(() => {
-    setAnalysisState('idle');
-    setUploadedFile(null);
+      if (response.success) {
+        setAnalysisResults(response.results);
+        addToProcessingLog('🎉 Direct processing completed!', 'success');
+        addNotification('🎉 Text processed successfully!', 'success');
+        trackComponent('MeetingAnalyzer', 'direct-processing-completed', { 
+          resultsCount: Object.keys(response.results).length 
+        });
+      } else {
+        throw new Error(response.error || 'Direct processing failed');
+      }
+    } catch (error) {
+      frontendLogger.error('❌ Direct processing failed', {
+        error: error.message,
+        contentLength: content.length,
+        meetingType
+      });
+      
+      addToProcessingLog(`❌ Processing failed: ${error.message}`, 'error');
+      addNotification(`❌ Processing failed: ${error.message}`, 'error');
+      trackComponent('MeetingAnalyzer', 'direct-processing-failed', { error: error.message });
+    }
+
+    setIsAnalyzing(false);
+  };
+
+  const clearAnalysis = () => {
+    trackComponent('MeetingAnalyzer', 'analysis-cleared');
     setAnalysisResults(null);
-    setProcessingStatus(null);
-    setAnalysisMetrics({});
-    processingQueue.current = null;
-    analysisStartTime.current = null;
-  }, []);
+    setAnalysisId(null);
+    setProcessingLog([]);
+    setValidationStatus(null);
+    addToProcessingLog('🧹 Analysis cleared', 'info');
+  };
 
-  /**
-   * Handle meeting type change
-   */
-  const handleMeetingTypeChange = useCallback((newType) => {
-    setMeetingType(newType);
-    updatePerformanceMetrics({
-      lastMeetingTypeChange: newType
+  const handleContentChange = (e) => {
+    const newContent = e.target.value;
+    setContent(newContent);
+    
+    // Clear validation when content changes
+    if (validationStatus) {
+      setValidationStatus(null);
+    }
+    
+    frontendLogger.component('📝 Content updated', { 
+      contentLength: newContent.length,
+      hasContent: newContent.trim().length > 0
     });
-  }, [updatePerformanceMetrics]);
+  };
 
-  // 🎨 Component Render
   return (
     <div className="meeting-analyzer">
-      {/* 📊 Analysis Header */}
       <div className="analyzer-header">
-        <h2>📋 Meeting Analysis</h2>
-        <p className="analyzer-description">
-          Upload your meeting notes and let Claude Sonnet 4 intelligently extract actionable Jira issues
-        </p>
-        
-        {analysisMetrics.issuesFound && (
-          <div className="quick-stats">
-            <span className="stat-item">
-              📊 {analysisMetrics.issuesFound} issues found
+        <h2>📊 Meeting Analysis</h2>
+        <div className="analyzer-status">
+          {backendHealth && (
+            <span className="backend-status">
+              Backend v{backendHealth.version} • {backendHealth.status}
             </span>
-            <span className="stat-item">
-              ⚡ {(analysisMetrics.analysisTime / 1000).toFixed(1)}s analysis
+          )}
+          {isAnalyzing && (
+            <span className="analyzing-indicator">
+              ⚡ Analyzing...
             </span>
-            <span className="stat-item">
-              🎯 {(analysisMetrics.confidence * 100).toFixed(1)}% confidence
-            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="analyzer-content">
+        {/* Input Section */}
+        <div className="input-section">
+          <div className="input-header">
+            <h3>📝 Meeting Content</h3>
+            <div className="input-controls">
+              <select
+                value={meetingType}
+                onChange={(e) => {
+                  setMeetingType(e.target.value);
+                  frontendLogger.component('📋 Meeting type changed', { 
+                    newType: e.target.value 
+                  });
+                }}
+                disabled={isAnalyzing}
+                className="meeting-type-select"
+              >
+                <option value="general">General Meeting</option>
+                <option value="standup">Daily Standup</option>
+                <option value="retrospective">Retrospective</option>
+                <option value="planning">Planning Session</option>
+                <option value="review">Review Meeting</option>
+                <option value="brainstorming">Brainstorming</option>
+              </select>
+            </div>
+          </div>
+
+          <textarea
+            value={content}
+            onChange={handleContentChange}
+            placeholder="Paste your meeting transcript, notes, or recording text here..."
+            disabled={isAnalyzing}
+            className="content-textarea"
+            rows={12}
+          />
+
+          <div className="input-footer">
+            <div className="content-stats">
+              {content && (
+                <>
+                  <span>Characters: {content.length}</span>
+                  <span>Words: {content.split(/\s+/).filter(w => w.length > 0).length}</span>
+                </>
+              )}
+              
+              {validationStatus && (
+                <span className={`validation-status ${validationStatus.valid ? 'valid' : 'invalid'}`}>
+                  {validationStatus.valid ? '✅ Valid' : `❌ ${validationStatus.error}`}
+                </span>
+              )}
+            </div>
+
+            <div className="action-buttons">
+              <button
+                onClick={startAnalysis}
+                disabled={isAnalyzing || !content.trim()}
+                className="analyze-button primary-btn"
+              >
+                {isAnalyzing ? '⚡ Analyzing...' : '🧠 Analyze Meeting'}
+              </button>
+
+              <button
+                onClick={processDirectText}
+                disabled={isAnalyzing || !content.trim()}
+                className="direct-button secondary-btn"
+              >
+                ⚡ Quick Process
+              </button>
+
+              {(analysisResults || isAnalyzing) && (
+                <button
+                  onClick={clearAnalysis}
+                  disabled={isAnalyzing}
+                  className="clear-button tertiary-btn"
+                >
+                  🧹 Clear
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Processing Log */}
+        {processingLog.length > 0 && (
+          <div className="processing-log">
+            <h3>📋 Processing Log</h3>
+            <div className="log-entries">
+              {processingLog.slice(-10).map(entry => (
+                <div key={entry.id} className={`log-entry log-${entry.type}`}>
+                  <span className="log-time">
+                    {new Date(entry.timestamp).toLocaleTimeString()}
+                  </span>
+                  <span className="log-message">{entry.message}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Analysis Results */}
+        {analysisResults && (
+          <div className="analysis-results">
+            <div className="results-header">
+              <h3>🎯 Analysis Results</h3>
+              <div className="results-meta">
+                {analysisId && <span>ID: {analysisId}</span>}
+                <span>Type: {meetingType}</span>
+                <span>Processed: {new Date(analysisResults.processedAt || Date.now()).toLocaleString()}</span>
+              </div>
+            </div>
+
+            <div className="results-content">
+              {/* Summary */}
+              {analysisResults.summary && (
+                <div className="result-section">
+                  <h4>📄 Summary</h4>
+                  <div className="summary-content">
+                    {analysisResults.summary}
+                  </div>
+                </div>
+              )}
+
+              {/* Action Items */}
+              {analysisResults.actionItems && analysisResults.actionItems.length > 0 && (
+                <div className="result-section">
+                  <h4>✅ Action Items ({analysisResults.actionItems.length})</h4>
+                  <div className="action-items">
+                    {analysisResults.actionItems.map((item, index) => (
+                      <div key={item.id || index} className="action-item">
+                        <div className="action-text">{item.text}</div>
+                        {item.assignee && (
+                          <div className="action-assignee">Assigned to: {item.assignee}</div>
+                        )}
+                        {item.dueDate && (
+                          <div className="action-due">Due: {item.dueDate}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Decisions */}
+              {analysisResults.decisions && analysisResults.decisions.length > 0 && (
+                <div className="result-section">
+                  <h4>🎯 Decisions ({analysisResults.decisions.length})</h4>
+                  <div className="decisions">
+                    {analysisResults.decisions.map((decision, index) => (
+                      <div key={decision.id || index} className="decision-item">
+                        <div className="decision-text">{decision.text}</div>
+                        {decision.context && (
+                          <div className="decision-context">Context: {decision.context}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Issues */}
+              {analysisResults.issues && analysisResults.issues.length > 0 && (
+                <div className="result-section">
+                  <h4>⚠️ Issues ({analysisResults.issues.length})</h4>
+                  <div className="issues">
+                    {analysisResults.issues.map((issue, index) => (
+                      <div key={issue.id || index} className="issue-item">
+                        <div className="issue-text">{issue.text}</div>
+                        {issue.severity && (
+                          <div className="issue-severity">Severity: {issue.severity}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Participants */}
+              {analysisResults.participants && analysisResults.participants.length > 0 && (
+                <div className="result-section">
+                  <h4>👥 Participants ({analysisResults.participants.length})</h4>
+                  <div className="participants">
+                    {analysisResults.participants.map((participant, index) => (
+                      <span key={index} className="participant-tag">
+                        {participant}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
 
-      {/* 🎯 Meeting Type Selection */}
-      <MeetingTypeSelector
-        selectedType={meetingType}
-        onTypeChange={handleMeetingTypeChange}
-        disabled={analysisState === 'processing'}
-      />
+      <style jsx>{`
+        .meeting-analyzer {
+          display: flex;
+          flex-direction: column;
+          gap: 20px;
+          padding: 20px;
+        }
 
-      {/* 📁 File Upload Section */}
-      {analysisState === 'idle' && (
-        <FileUploader
-          onFileUpload={handleFileUpload}
-          supportedFormats={['.txt', '.docx']}
-          maxSize={500 * 1024} // 500KB
-        />
-      )}
+        .analyzer-header {
+          display: flex;
+          justify-content: between;
+          align-items: center;
+          gap: 20px;
+        }
 
-      {/* ✅ File Ready Section */}
-      {analysisState === 'ready' && uploadedFile && (
-        <div className="file-ready-section">
-          <div className="uploaded-file-info">
-            <h3>📄 File Ready for Analysis</h3>
-            <div className="file-details">
-              <span className="file-name">{uploadedFile.file.name}</span>
-              <span className="file-size">
-                {(uploadedFile.file.size / 1024).toFixed(1)} KB
-              </span>
-              <span className="meeting-type-badge">
-                {meetingType.charAt(0).toUpperCase() + meetingType.slice(1)} Meeting
-              </span>
-            </div>
-          </div>
-          
-          <div className="analysis-actions">
-            <button
-              onClick={handleStartAnalysis}
-              className="start-analysis-btn primary-btn"
-            >
-              🧠 Start AI Analysis
-            </button>
-            <button
-              onClick={handleReset}
-              className="reset-btn secondary-btn"
-            >
-              🔄 Upload Different File
-            </button>
-          </div>
-        </div>
-      )}
+        .analyzer-header h2 {
+          margin: 0;
+          color: #2d3436;
+        }
 
-      {/* ⏳ Processing Status */}
-      {analysisState === 'processing' && processingStatus && (
-        <ProcessingStatus
-          status={processingStatus}
-          onCancel={() => {
-            // TODO: Implement cancellation
-            addNotification('Analysis cancellation not yet implemented', 'info');
-          }}
-        />
-      )}
+        .analyzer-status {
+          display: flex;
+          gap: 15px;
+          align-items: center;
+        }
 
-      {/* 📊 Analysis Results */}
-      {analysisState === 'completed' && analysisResults && (
-        <AnalysisResults
-          results={analysisResults}
-          metrics={analysisMetrics}
-          onNewAnalysis={handleReset}
-          addNotification={addNotification}
-        />
-      )}
+        .backend-status {
+          background: #e8f5e8;
+          color: #27ae60;
+          padding: 4px 8px;
+          border-radius: 4px;
+          font-size: 12px;
+        }
 
-      {/* ❌ Error State */}
-      {analysisState === 'error' && (
-        <div className="analysis-error">
-          <h3>❌ Analysis Error</h3>
-          <p>Something went wrong during the analysis process.</p>
-          <button onClick={handleReset} className="retry-btn">
-            🔄 Try Again
-          </button>
-        </div>
-      )}
+        .analyzing-indicator {
+          background: #fff3cd;
+          color: #e67e22;
+          padding: 4px 8px;
+          border-radius: 4px;
+          font-size: 12px;
+          animation: pulse 1.5s infinite;
+        }
+
+        .input-section {
+          background: white;
+          border: 1px solid #e1e8ed;
+          border-radius: 8px;
+          padding: 20px;
+        }
+
+        .input-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 15px;
+        }
+
+        .input-header h3 {
+          margin: 0;
+          color: #2d3436;
+        }
+
+        .meeting-type-select {
+          padding: 8px 12px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          background: white;
+        }
+
+        .content-textarea {
+          width: 100%;
+          padding: 15px;
+          border: 1px solid #ddd;
+          border-radius: 6px;
+          font-family: inherit;
+          font-size: 14px;
+          line-height: 1.5;
+          resize: vertical;
+          min-height: 200px;
+        }
+
+        .input-footer {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-top: 15px;
+          gap: 20px;
+        }
+
+        .content-stats {
+          display: flex;
+          gap: 15px;
+          font-size: 12px;
+          color: #636e72;
+        }
+
+        .validation-status.valid {
+          color: #27ae60;
+        }
+
+        .validation-status.invalid {
+          color: #e74c3c;
+        }
+
+        .action-buttons {
+          display: flex;
+          gap: 10px;
+        }
+
+        .action-buttons button {
+          padding: 10px 20px;
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          font-weight: 500;
+          transition: all 0.2s;
+        }
+
+        .primary-btn {
+          background: #6c5ce7;
+          color: white;
+        }
+
+        .secondary-btn {
+          background: #74b9ff;
+          color: white;
+        }
+
+        .tertiary-btn {
+          background: #636e72;
+          color: white;
+        }
+
+        .action-buttons button:hover:not(:disabled) {
+          transform: translateY(-1px);
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .action-buttons button:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+
+        .processing-log {
+          background: #f8f9fa;
+          border: 1px solid #e9ecef;
+          border-radius: 8px;
+          padding: 20px;
+        }
+
+        .processing-log h3 {
+          margin: 0 0 15px 0;
+          color: #495057;
+        }
+
+        .log-entries {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          max-height: 200px;
+          overflow-y: auto;
+        }
+
+        .log-entry {
+          display: flex;
+          gap: 10px;
+          padding: 8px 12px;
+          border-radius: 4px;
+          font-size: 13px;
+        }
+
+        .log-info {
+          background: #e8f4fd;
+          color: #0c5460;
+        }
+
+        .log-success {
+          background: #d4edda;
+          color: #155724;
+        }
+
+        .log-error {
+          background: #f8d7da;
+          color: #721c24;
+        }
+
+        .log-time {
+          color: #6c757d;
+          min-width: 70px;
+        }
+
+        .analysis-results {
+          background: white;
+          border: 1px solid #e1e8ed;
+          border-radius: 8px;
+          padding: 20px;
+        }
+
+        .results-header {
+          margin-bottom: 20px;
+        }
+
+        .results-header h3 {
+          margin: 0 0 10px 0;
+          color: #2d3436;
+        }
+
+        .results-meta {
+          display: flex;
+          gap: 15px;
+          font-size: 12px;
+          color: #636e72;
+        }
+
+        .result-section {
+          margin: 20px 0;
+          border-bottom: 1px solid #f1f3f4;
+          padding-bottom: 20px;
+        }
+
+        .result-section:last-child {
+          border-bottom: none;
+          padding-bottom: 0;
+        }
+
+        .result-section h4 {
+          margin: 0 0 15px 0;
+          color: #2d3436;
+        }
+
+        .summary-content {
+          background: #f8f9fa;
+          padding: 15px;
+          border-radius: 6px;
+          line-height: 1.6;
+        }
+
+        .action-item, .decision-item, .issue-item {
+          background: #f8f9fa;
+          padding: 12px;
+          border-radius: 6px;
+          margin: 8px 0;
+          border-left: 4px solid #6c5ce7;
+        }
+
+        .action-text, .decision-text, .issue-text {
+          font-weight: 500;
+          margin-bottom: 5px;
+        }
+
+        .action-assignee, .action-due, .decision-context, .issue-severity {
+          font-size: 12px;
+          color: #636e72;
+        }
+
+        .participants {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .participant-tag {
+          background: #e8f4fd;
+          color: #0c5460;
+          padding: 4px 8px;
+          border-radius: 12px;
+          font-size: 12px;
+        }
+
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.7; }
+        }
+      `}</style>
     </div>
   );
 };

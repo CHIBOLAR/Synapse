@@ -197,23 +197,51 @@ Extract issues with high confidence scores (>0.8) and provide clear reasoning fo
       tool_choice: { type: "auto" }
     };
 
-    const response = await fetch(this.baseURL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'anthropic-version': this.apiVersion,
-        'anthropic-beta': 'tools-2024-04-04'
-      },
-      body: JSON.stringify(requestBody)
-    });
+    // CRITICAL FIX: Use fetch properly for Forge environment
+    try {
+      const response = await fetch(this.baseURL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'anthropic-version': this.apiVersion,
+          'anthropic-beta': 'tools-2024-04-04',
+          'User-Agent': 'Synapse-Forge-App/2.1.1'
+        },
+        body: JSON.stringify(requestBody)
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Claude API error: ${response.status} - ${errorText}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        Logger.error('Claude API error response', {
+          status: response.status,
+          statusText: response.statusText,
+          errorText
+        });
+        throw new Error(`Claude API error: ${response.status} - ${errorText}`);
+      }
+
+      const result = await response.json();
+      Logger.info('Claude API success', {
+        inputTokens: result.usage?.input_tokens || 0,
+        outputTokens: result.usage?.output_tokens || 0
+      });
+
+      return result;
+
+    } catch (error) {
+      Logger.error('Claude API request failed', {
+        error: error.message,
+        stack: error.stack,
+        baseURL: this.baseURL
+      });
+      
+      if (error.message.includes('fetch')) {
+        throw new Error('Network error: Unable to connect to Claude API. Please check your internet connection and try again.');
+      }
+      
+      throw error;
     }
-
-    return await response.json();
   }
 
   /**
@@ -296,10 +324,18 @@ Extract issues with high confidence scores (>0.8) and provide clear reasoning fo
    */
   async getAPIKey() {
     try {
+      // First try environment variable (for development/testing)
+      const envKey = process.env.CLAUDE_API_KEY;
+      if (envKey) {
+        Logger.debug('Using Claude API key from environment');
+        return envKey;
+      }
+
+      // Fallback to storage for production deployment
       const activeKeys = await storage.get('claude:api_keys:active') || [];
       
       if (activeKeys.length === 0) {
-        throw new Error('No active Claude API keys configured');
+        throw new Error('No Claude API keys configured in environment or storage');
       }
 
       // Select least used key for load balancing

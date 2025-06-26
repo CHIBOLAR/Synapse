@@ -1,0 +1,236 @@
+// Main Forge function exports for Synapse MVP
+// All serverless function handlers are exported from this file
+
+import { AnalysisResolver } from './resolvers/analysisResolver.js';
+import { AdminResolver } from './resolvers/adminResolver.js';
+import { Logger } from './utils/logger.js';
+import { ErrorHandler } from './utils/errorHandler.js';
+
+// Initialize resolvers
+const analysisResolver = new AnalysisResolver();
+const adminResolver = new AdminResolver();
+
+// Main application handler (primary UI)
+export const mainHandler = async (req, context) => {
+  try {
+    Logger.info('Main handler invoked', {
+      method: req.method,
+      path: req.path,
+      userId: context.accountId
+    });
+
+    // Route to appropriate handler based on request
+    switch (req.path) {
+      case '/analyze':
+        return await analysisResolver.startAnalysis(req, context);
+      
+      case '/status':
+        return await analysisResolver.getStatus(req, context);
+      
+      case '/upload':
+        return await analysisResolver.handleFileUpload(req, context);
+      
+      case '/history':
+        return await analysisResolver.getHistory(req, context);
+      
+      default:
+        return {
+          statusCode: 200,
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            message: 'Synapse AI Meeting Analyzer',
+            version: '1.0.0',
+            status: 'operational',
+            features: [
+              'Claude Sonnet 4 Integration',
+              'Meeting Analysis',
+              'Jira Issue Creation',
+              'Real-time Processing'
+            ]
+          })
+        };
+    }
+  } catch (error) {
+    Logger.error('Main handler error', { error: error.message, stack: error.stack });
+    return ErrorHandler.handleError(error, req, context);
+  }
+};
+
+// Admin panel handler
+export const adminHandler = async (req, context) => {
+  try {
+    Logger.info('Admin handler invoked', {
+      method: req.method,
+      path: req.path,
+      userId: context.accountId
+    });
+
+    // Verify admin permissions
+    await adminResolver.verifyAdminAccess(context);
+
+    // Route admin requests
+    switch (req.path) {
+      case '/api-keys':
+        return await adminResolver.manageAPIKeys(req, context);
+      
+      case '/metrics':
+        return await adminResolver.getUsageMetrics(req, context);
+      
+      case '/system-status':
+        return await adminResolver.getSystemStatus(req, context);
+      
+      case '/audit-log':
+        return await adminResolver.getAuditLog(req, context);
+      
+      default:
+        return {
+          statusCode: 200,
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            message: 'Synapse Admin Panel',
+            version: '1.0.0',
+            capabilities: [
+              'API Key Management',
+              'Usage Metrics',
+              'System Monitoring',
+              'Audit Logging'
+            ]
+          })
+        };
+    }
+  } catch (error) {
+    Logger.error('Admin handler error', { error: error.message, stack: error.stack });
+    return ErrorHandler.handleError(error, req, context);
+  }
+};
+
+// Async processing handler
+export const asyncHandler = async (req, context) => {
+  try {
+    Logger.info('Async handler invoked', {
+      queueName: req.queueName,
+      eventType: req.eventType
+    });
+
+    // Process queue events
+    switch (req.queueName) {
+      case 'analysis-processing-queue':
+        return await analysisResolver.processAnalysisQueue(req, context);
+      
+      default:
+        Logger.warn('Unknown queue event', { queueName: req.queueName });
+        return { statusCode: 200 };
+    }
+  } catch (error) {
+    Logger.error('Async handler error', { error: error.message, stack: error.stack });
+    return ErrorHandler.handleError(error, req, context);
+  }
+};
+
+// Webhook handler for external integrations
+export const webhookHandler = async (req, context) => {
+  try {
+    Logger.info('Webhook handler invoked', {
+      method: req.method,
+      eventType: req.pathParameters?.eventType
+    });
+
+    // Basic webhook acknowledgment
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ received: true, timestamp: new Date().toISOString() })
+    };
+  } catch (error) {
+    Logger.error('Webhook handler error', { error: error.message, stack: error.stack });
+    return ErrorHandler.handleError(error, req, context);
+  }
+};
+
+// Metrics aggregation handler
+export const metricsHandler = async (req, context) => {
+  try {
+    Logger.info('Metrics handler invoked');
+    return await adminResolver.getUsageMetrics(req, context);
+  } catch (error) {
+    Logger.error('Metrics handler error', { error: error.message, stack: error.stack });
+    return ErrorHandler.handleError(error, req, context);
+  }
+};
+
+// Cleanup job handler
+export const cleanupHandler = async (req, context) => {
+  try {
+    Logger.info('Cleanup handler invoked');
+    
+    // Perform cleanup tasks
+    const results = await Promise.allSettled([
+      analysisResolver.cleanupOldAnalyses(),
+      adminResolver.cleanupAuditLogs()
+    ]);
+
+    const summary = {
+      timestamp: new Date().toISOString(),
+      tasks: results.map((result, index) => ({
+        task: ['analyses', 'audit'][index],
+        status: result.status,
+        result: result.status === 'fulfilled' ? result.value : result.reason
+      }))
+    };
+
+    Logger.info('Cleanup completed', summary);
+    
+    return {
+      statusCode: 200,
+      body: JSON.stringify(summary)
+    };
+  } catch (error) {
+    Logger.error('Cleanup handler error', { error: error.message, stack: error.stack });
+    return ErrorHandler.handleError(error, req, context);
+  }
+};
+
+// Health monitoring handler
+export const healthHandler = async (req, context) => {
+  try {
+    Logger.debug('Health check invoked');
+    
+    const healthStatus = await adminResolver.getHealthStatus();
+    
+    return {
+      statusCode: healthStatus.healthy ? 200 : 503,
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(healthStatus)
+    };
+  } catch (error) {
+    Logger.error('Health handler error', { error: error.message, stack: error.stack });
+    return {
+      statusCode: 503,
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        healthy: false,
+        error: error.message,
+        timestamp: new Date().toISOString()
+      })
+    };
+  }
+};
+
+// Export all handlers for manifest.yml
+export default {
+  mainHandler,
+  adminHandler,
+  asyncHandler,
+  webhookHandler,
+  metricsHandler,
+  cleanupHandler,
+  healthHandler
+};

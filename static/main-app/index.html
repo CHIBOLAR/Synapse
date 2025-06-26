@@ -84,16 +84,6 @@
     
     <!-- React application will mount here -->
     
-    <!-- Load React and application bundle -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    
-    <!-- Forge Bridge for Atlassian integration -->
-    <script src="https://connect-cdn.atl-paas.net/all.js"></script>
-    
-    <!-- Application entry point -->
-    <script type="module" src="./src/index.jsx"></script>
-    
     <!-- Performance monitoring script -->
     <script>
         // Basic performance tracking
@@ -114,5 +104,7 @@
             // TODO: Send to error tracking service
         });
     </script>
+    <!-- Vite will inject the correct JS and CSS during build -->
+    <script type="module" src="/src/index.jsx"></script>
 </body>
 </html>

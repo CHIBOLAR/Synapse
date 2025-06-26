@@ -1,0 +1,615 @@
+// Analysis Resolver - Core meeting analysis functionality
+// Handles meeting analysis requests, status tracking, and history
+
+import { ClaudeSonnet4Service } from '../services/claudeSonnet4Service.js';
+import { SecurityService } from '../services/securityService.js';
+import { QueueManager } from '../services/queueManager.js';
+import { JiraService } from '../services/jiraService.js';
+import { Logger } from '../utils/logger.js';
+import { ErrorHandler } from '../utils/errorHandler.js';
+import { storage } from '@forge/api';
+
+export class AnalysisResolver {
+  constructor() {
+    this.claudeService = new ClaudeSonnet4Service();
+    this.securityService = new SecurityService();
+    this.queueManager = new QueueManager();
+    this.jiraService = new JiraService();
+  }
+
+  /**
+   * Start meeting analysis
+   * @param {Object} req - Request object
+   * @param {Object} context - Forge context
+   * @returns {Promise<Object>} Analysis result
+   */
+  async startAnalysis(req, context) {
+    try {
+      // Security validation
+      this.securityService.validateUserContext(context);
+      await this.securityService.checkRateLimit(context.accountId, 'analysis', 10, 3600000);
+
+      // Extract and validate request data
+      const { notes, meetingType, issueType, options = {} } = JSON.parse(req.body || '{}');
+      
+      if (!notes || !meetingType || !issueType) {
+        throw new Error('Missing required fields: notes, meetingType, issueType');
+      }
+
+      // Sanitize inputs
+      const sanitizedNotes = this.securityService.sanitizeInput(notes, 'meetingNotes');
+      const sanitizedMeetingType = this.securityService.sanitizeInput(meetingType, 'default');
+      const sanitizedIssueType = this.securityService.sanitizeInput(issueType, 'default');
+
+      // Create analysis record
+      const analysisId = this.generateAnalysisId();
+      const analysisRecord = {
+        id: analysisId,
+        userId: context.accountId,
+        siteId: context.cloudId,
+        createdAt: new Date().toISOString(),
+        status: 'queued',
+        progress: 0,
+        meetingType: sanitizedMeetingType,
+        issueType: sanitizedIssueType,
+        notesLength: sanitizedNotes.length,
+        options: {
+          createJiraIssues: options.createJiraIssues !== false,
+          assignToCurrentUser: options.assignToCurrentUser || false,
+          projectKey: options.projectKey || null
+        }
+      };
+
+      // Store analysis record
+      await storage.set(`analysis:${analysisId}`, analysisRecord);
+
+      // Queue for processing
+      await this.queueManager.queueAnalysis({
+        analysisId,
+        userId: context.accountId,
+        notes: sanitizedNotes,
+        meetingType: sanitizedMeetingType,
+        issueType: sanitizedIssueType,
+        options: analysisRecord.options
+      });
+
+      Logger.info('Analysis queued', {
+        analysisId,
+        userId: context.accountId,
+        meetingType: sanitizedMeetingType,
+        issueType: sanitizedIssueType,
+        notesLength: sanitizedNotes.length
+      });
+
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          success: true,
+          analysisId,
+          status: 'queued',
+          estimatedCompletion: this.estimateCompletionTime(),
+          message: 'Analysis started successfully'
+        })
+      };
+
+    } catch (error) {
+      Logger.error('Analysis start failed', {
+        error: error.message,
+        userId: context.accountId
+      });
+      return ErrorHandler.handleError(error, req, context);
+    }
+  }
+
+  /**
+   * Get analysis status
+   * @param {Object} req - Request object
+   * @param {Object} context - Forge context
+   * @returns {Promise<Object>} Status response
+   */
+  async getStatus(req, context) {
+    try {
+      this.securityService.validateUserContext(context);
+
+      const analysisId = req.query?.analysisId || req.pathParameters?.analysisId;
+      
+      if (!analysisId) {
+        throw new Error('Analysis ID required');
+      }
+
+      // Get analysis record
+      const analysisRecord = await storage.get(`analysis:${analysisId}`);
+      
+      if (!analysisRecord) {
+        return {
+          statusCode: 404,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            success: false,
+            error: 'Analysis not found'
+          })
+        };
+      }
+
+      // Verify ownership
+      if (analysisRecord.userId !== context.accountId) {
+        throw new SecurityError('Access denied to analysis record');
+      }
+
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          success: true,
+          analysis: {
+            id: analysisRecord.id,
+            status: analysisRecord.status,
+            progress: analysisRecord.progress,
+            createdAt: analysisRecord.createdAt,
+            completedAt: analysisRecord.completedAt,
+            meetingType: analysisRecord.meetingType,
+            issueType: analysisRecord.issueType,
+            issuesCreated: analysisRecord.issuesCreated || 0,
+            errors: analysisRecord.errors || [],
+            result: analysisRecord.result || null
+          }
+        })
+      };
+
+    } catch (error) {
+      Logger.error('Status check failed', {
+        error: error.message,
+        userId: context.accountId
+      });
+      return ErrorHandler.handleError(error, req, context);
+    }
+  }
+
+  /**
+   * Get analysis history for user
+   * @param {Object} req - Request object
+   * @param {Object} context - Forge context
+   * @returns {Promise<Object>} History response
+   */
+  async getHistory(req, context) {
+    try {
+      this.securityService.validateUserContext(context);
+
+      const { limit = 50, offset = 0, filter = {} } = req.query || {};
+      const userId = context.accountId;
+
+      // Get user's analyses
+      const historyKey = `user:${userId}:analyses`;
+      const analysisIds = await storage.get(historyKey) || [];
+
+      // Apply pagination
+      const paginatedIds = analysisIds
+        .sort((a, b) => b.createdAt - a.createdAt) // Most recent first
+        .slice(offset, offset + parseInt(limit));
+
+      // Get analysis records
+      const analyses = await Promise.all(
+        paginatedIds.map(async (id) => {
+          const record = await storage.get(`analysis:${id}`);
+          return record ? this.sanitizeAnalysisForHistory(record) : null;
+        })
+      );
+
+      const validAnalyses = analyses.filter(Boolean);
+
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          success: true,
+          analyses: validAnalyses,
+          total: analysisIds.length,
+          offset: parseInt(offset),
+          limit: parseInt(limit),
+          hasMore: offset + limit < analysisIds.length
+        })
+      };
+
+    } catch (error) {
+      Logger.error('History retrieval failed', {
+        error: error.message,
+        userId: context.accountId
+      });
+      return ErrorHandler.handleError(error, req, context);
+    }
+  }
+
+  /**
+   * Process analysis queue (called by async handler)
+   * @param {Object} req - Queue request
+   * @param {Object} context - Forge context
+   * @returns {Promise<Object>} Processing result
+   */
+  async processAnalysisQueue(req, context) {
+    try {
+      const queueData = JSON.parse(req.body || '{}');
+      const { analysisId, userId, notes, meetingType, issueType, options } = queueData;
+
+      Logger.info('Processing analysis from queue', {
+        analysisId,
+        userId,
+        meetingType,
+        issueType
+      });
+
+      // Update status to processing
+      await this.updateAnalysisStatus(analysisId, 'processing', 10);
+
+      // Perform Claude analysis
+      const analysisResult = await this.claudeService.analyzeMeeting({
+        notes,
+        meetingType,
+        issueType,
+        userId
+      });
+
+      await this.updateAnalysisStatus(analysisId, 'processing', 50);
+
+      if (!analysisResult.success) {
+        throw new Error('Claude analysis failed');
+      }
+
+      // Create Jira issues if requested
+      let jiraResults = [];
+      if (options.createJiraIssues && analysisResult.issues.length > 0) {
+        await this.updateAnalysisStatus(analysisId, 'creating_issues', 75);
+
+        jiraResults = await this.createJiraIssues(
+          analysisResult.issues,
+          options,
+          userId
+        );
+      }
+
+      // Complete analysis
+      const finalResult = {
+        ...analysisResult,
+        jiraIssues: jiraResults,
+        completedAt: new Date().toISOString()
+      };
+
+      await this.updateAnalysisStatus(analysisId, 'completed', 100, finalResult);
+
+      // Update user history
+      await this.addToUserHistory(userId, analysisId);
+
+      Logger.info('Analysis completed successfully', {
+        analysisId,
+        userId,
+        issuesExtracted: analysisResult.issues.length,
+        jiraIssuesCreated: jiraResults.length
+      });
+
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ success: true, analysisId })
+      };
+
+    } catch (error) {
+      Logger.error('Queue processing failed', {
+        error: error.message,
+        analysisId: req.body?.analysisId
+      });
+
+      // Update analysis with error
+      if (req.body?.analysisId) {
+        await this.updateAnalysisStatus(
+          req.body.analysisId,
+          'failed',
+          0,
+          null,
+          [error.message]
+        );
+      }
+
+      return ErrorHandler.handleError(error, req, context);
+    }
+  }
+
+  /**
+   * Create Jira issues from analysis results
+   */
+  async createJiraIssues(issues, options, userId) {
+    const jiraResults = [];
+
+    for (const issue of issues) {
+      try {
+        // Skip low confidence issues
+        if (issue.confidence_score < 0.7) {
+          Logger.info('Skipping low confidence issue', {
+            summary: issue.summary,
+            confidence: issue.confidence_score
+          });
+          continue;
+        }
+
+        const jiraIssue = await this.jiraService.createIssue({
+          summary: issue.summary,
+          description: issue.description,
+          issueType: issue.issueType,
+          priority: issue.priority,
+          assignee: options.assignToCurrentUser ? userId : issue.assignee,
+          labels: issue.labels || [],
+          projectKey: options.projectKey
+        });
+
+        jiraResults.push({
+          original: issue,
+          jiraIssue,
+          success: true
+        });
+
+        Logger.info('Jira issue created', {
+          issueKey: jiraIssue.key,
+          summary: issue.summary
+        });
+
+      } catch (error) {
+        Logger.error('Jira issue creation failed', {
+          summary: issue.summary,
+          error: error.message
+        });
+
+        jiraResults.push({
+          original: issue,
+          success: false,
+          error: error.message
+        });
+      }
+    }
+
+    return jiraResults;
+  }
+
+  /**
+   * Update analysis status
+   */
+  async updateAnalysisStatus(analysisId, status, progress, result = null, errors = null) {
+    try {
+      const analysisRecord = await storage.get(`analysis:${analysisId}`);
+      
+      if (analysisRecord) {
+        analysisRecord.status = status;
+        analysisRecord.progress = progress;
+        analysisRecord.updatedAt = new Date().toISOString();
+        
+        if (result) {
+          analysisRecord.result = result;
+          analysisRecord.completedAt = new Date().toISOString();
+          analysisRecord.issuesCreated = result.jiraIssues?.length || 0;
+        }
+        
+        if (errors) {
+          analysisRecord.errors = (analysisRecord.errors || []).concat(errors);
+        }
+
+        await storage.set(`analysis:${analysisId}`, analysisRecord);
+      }
+    } catch (error) {
+      Logger.error('Failed to update analysis status', {
+        analysisId,
+        status,
+        error: error.message
+      });
+    }
+  }
+
+  /**
+   * Add analysis to user history
+   */
+  async addToUserHistory(userId, analysisId) {
+    try {
+      const historyKey = `user:${userId}:analyses`;
+      const history = await storage.get(historyKey) || [];
+      
+      // Add to beginning of history
+      history.unshift(analysisId);
+      
+      // Keep only last 100 analyses
+      const trimmedHistory = history.slice(0, 100);
+      
+      await storage.set(historyKey, trimmedHistory);
+    } catch (error) {
+      Logger.error('Failed to update user history', {
+        userId,
+        analysisId,
+        error: error.message
+      });
+    }
+  }
+
+  /**
+   * Clean up old analyses (called by cleanup job)
+   */
+  async cleanupOldAnalyses() {
+    try {
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - 90); // 90 days old
+
+      // This is a simplified cleanup - in production, you'd need
+      // to iterate through analysis records more efficiently
+      Logger.info('Analysis cleanup completed', {
+        cutoffDate: cutoffDate.toISOString(),
+        message: 'Cleanup logic would be implemented here'
+      });
+
+      return { cleaned: 0, message: 'Cleanup functionality ready for implementation' };
+    } catch (error) {
+      Logger.error('Analysis cleanup failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  /**
+   * Get user configuration
+   * @param {Object} context - Forge context
+   * @returns {Promise<Object>} User configuration
+   */
+  async getUserConfig(context) {
+    try {
+      this.securityService.validateUserContext(context);
+      
+      const configKey = `user_config_${context.accountId}`;
+      const userConfig = await storage.get(configKey);
+      
+      // Default configuration if none exists
+      const defaultConfig = {
+        analysisSettings: {
+          defaultMeetingType: 'general',
+          defaultIssueType: 'task',
+          autoCreateIssues: true,
+          notificationPreferences: {
+            email: true,
+            inApp: true
+          }
+        },
+        uiPreferences: {
+          theme: 'light',
+          compactView: false
+        },
+        createdAt: new Date().toISOString(),
+        lastUpdated: new Date().toISOString()
+      };
+      
+      return userConfig || defaultConfig;
+    } catch (error) {
+      Logger.error('Failed to get user config', { error: error.message, userId: context.accountId });
+      throw new Error('Failed to retrieve user configuration');
+    }
+  }
+
+  /**
+   * Update user configuration
+   * @param {Object} config - Configuration to update
+   * @param {Object} context - Forge context
+   * @returns {Promise<Object>} Updated configuration
+   */
+  async updateUserConfig(config, context) {
+    try {
+      this.securityService.validateUserContext(context);
+      
+      // Sanitize configuration
+      const sanitizedConfig = this.securityService.sanitizeInput(config, 'json');
+      
+      const configKey = `user_config_${context.accountId}`;
+      const existingConfig = await storage.get(configKey) || {};
+      
+      const updatedConfig = {
+        ...existingConfig,
+        ...sanitizedConfig,
+        lastUpdated: new Date().toISOString()
+      };
+      
+      await storage.set(configKey, updatedConfig);
+      
+      Logger.info('User config updated', { userId: context.accountId });
+      return updatedConfig;
+    } catch (error) {
+      Logger.error('Failed to update user config', { error: error.message, userId: context.accountId });
+      throw new Error('Failed to update user configuration');
+    }
+  }
+
+  /**
+   * Handle file upload for meeting analysis
+   * @param {Object} payload - Upload payload
+   * @param {Object} context - Forge context
+   * @returns {Promise<Object>} Upload result
+   */
+  async handleFileUpload(payload, context) {
+    try {
+      this.securityService.validateUserContext(context);
+      
+      const { fileContent, fileName, fileType } = payload;
+      
+      if (!fileContent) {
+        throw new Error('No file content provided');
+      }
+      
+      // Validate file type
+      const allowedTypes = ['text/plain', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+      if (fileType && !allowedTypes.includes(fileType)) {
+        throw new Error('Unsupported file type. Please upload .txt or .docx files.');
+      }
+      
+      // Sanitize file content
+      const sanitizedContent = this.securityService.sanitizeInput(fileContent, 'meetingNotes');
+      
+      // Validate content length
+      if (sanitizedContent.length > 50000) { // 50KB limit
+        throw new Error('File content too large. Maximum size is 50KB.');
+      }
+      
+      Logger.info('File uploaded successfully', { 
+        userId: context.accountId, 
+        fileName,
+        contentLength: sanitizedContent.length 
+      });
+      
+      return {
+        success: true,
+        content: sanitizedContent,
+        fileName,
+        contentLength: sanitizedContent.length
+      };
+      
+    } catch (error) {
+      Logger.error('File upload failed', { error: error.message, userId: context.accountId });
+      throw error;
+    }
+  }
+
+  /**
+   * Generate unique analysis ID
+   */
+  generateAnalysisId() {
+    const timestamp = Date.now().toString(36);
+    const random = Math.random().toString(36).substr(2, 9);
+    return `analysis_${timestamp}_${random}`;
+  }
+
+  /**
+   * Estimate completion time based on queue length
+   */
+  estimateCompletionTime() {
+    // Simple estimation - in production, this would check actual queue length
+    const baseTime = 30; // 30 seconds base processing time
+    const estimatedSeconds = baseTime + Math.random() * 60; // Add up to 60 seconds for queue
+    
+    return new Date(Date.now() + estimatedSeconds * 1000).toISOString();
+  }
+
+  /**
+   * Sanitize analysis record for history display
+   */
+  sanitizeAnalysisForHistory(record) {
+    return {
+      id: record.id,
+      status: record.status,
+      progress: record.progress,
+      createdAt: record.createdAt,
+      completedAt: record.completedAt,
+      meetingType: record.meetingType,
+      issueType: record.issueType,
+      issuesCreated: record.issuesCreated || 0,
+      notesLength: record.notesLength,
+      hasErrors: (record.errors && record.errors.length > 0) || false
+    };
+  }
+}
+
+/**
+ * Custom error for security violations
+ */
+class SecurityError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'SecurityError';
+  }
+}

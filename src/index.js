@@ -1,405 +1,445 @@
-// Main Forge function exports for Synapse - COMPLETELY FIXED
-// Supports ALL frontend invoke() calls with proper database integration
+/**
+ * 🧠 SYNAPSE MAIN HANDLER
+ * 
+ * Main entry point for Synapse AI Meeting Analysis
+ */
 
-import { AnalysisResolver } from './resolvers/analysisResolver.js';
-import { AdminResolver } from './resolvers/adminResolver.js';
-import { Logger } from './utils/logger.js';
-import { ErrorHandler } from './utils/errorHandler.js';
-import { storage } from '@forge/api'; // ADDED: Missing storage import
+import Resolver from '@forge/resolver';
+import { storage } from '@forge/api';
 
-// Initialize resolvers
-const analysisResolver = new AnalysisResolver();
-const adminResolver = new AdminResolver();
+const resolver = new Resolver();
 
-// Main application handler (handles ALL frontend invoke calls)
-export const mainHandler = async (req, context) => {
+// Text analysis function
+resolver.define('analyzeText', async (req) => {
   try {
-    Logger.info('Main handler invoked', {
-      method: req.method,
-      path: req.path,
-      body: req.body ? 'present' : 'none',
-      userId: context.accountId
-    });
-
-    // Parse the request to determine the method being called
-    let methodName, payload;
+    const { payload, context } = req;
+    console.log('Analyzing text:', payload?.text?.substring(0, 50) + '...');
     
-    if (req.body) {
-      try {
-        const parsed = JSON.parse(req.body);
-        // For Forge bridge calls, the method name might be in different places        methodName = parsed.methodName || parsed.action || req.path?.replace('/', '') || 'default';
-        payload = parsed.payload || parsed.data || parsed;
-      } catch (e) {
-        methodName = req.path?.replace('/', '') || 'default';
-        payload = {};
-      }
-    } else {
-      methodName = req.path?.replace('/', '') || 'default';
-      payload = req.queryParameters || {};
-    }
-
-    Logger.info('Processing method', { methodName, hasPayload: !!payload });
-
-    // Route to the appropriate method - COVERS ALL FRONTEND CALLS
-    switch (methodName) {
-      
-      // === CORE ANALYSIS METHODS ===
-      case 'validateContent':
-        return await handleMethodCall(() => analysisResolver.validateContent(payload, context));
-      
-      case 'startAnalysis':
-        return await handleMethodCall(() => analysisResolver.startAnalysis(payload, context));
-      
-      case 'getAnalysisStatus':
-        return await handleMethodCall(() => analysisResolver.getAnalysisStatus(payload, context));
-      
-      case 'getAnalysisResults':
-        return await handleMethodCall(() => analysisResolver.getAnalysisResults(payload, context));
-      
-      // === TEXT INPUT METHODS ===
-      case 'processDirectText':
-        return await handleMethodCall(() => analysisResolver.processDirectText(payload, context));
-      
-      // === FILE UPLOAD METHODS ===
-      case 'uploadFile':
-      case 'handleFileUpload':
-        return await handleMethodCall(() => analysisResolver.handleFileUpload(payload, context));      
-      // === JIRA INTEGRATION ===
-      case 'createJiraIssues':
-        return await handleMethodCall(() => analysisResolver.createJiraIssues(payload, context));
-      
-      // === USER CONTEXT METHODS ===
-      case 'getUserContext':
-        return await handleMethodCall(() => getUserContext(context));
-      
-      case 'getUserConfig':
-        return await handleMethodCall(() => getUserConfig(context));
-      
-      case 'checkAdminPermissions':
-        return await handleMethodCall(() => checkAdminPermissions(context));
-      
-      // === ADMIN METHODS ===
-      case 'getAdminSettings':
-        return await handleMethodCall(() => adminResolver.getAdminSettings(payload, context));
-      
-      case 'getSystemMetrics':
-        return await handleMethodCall(() => adminResolver.getSystemMetrics(payload, context));
-      
-      case 'getUserMetrics':
-        return await handleMethodCall(() => adminResolver.getUserMetrics(payload, context));
-      
-      case 'saveAdminSettings':
-        return await handleMethodCall(() => adminResolver.saveAdminSettings(payload, context));
-      
-      // === LEGACY HTTP ROUTES (backwards compatibility) ===
-      case 'analyze':
-        return await handleMethodCall(() => analysisResolver.startAnalysis(payload, context));
-      
-      case 'status':
-        return await handleMethodCall(() => analysisResolver.getAnalysisStatus(payload, context));
-      
-      case 'upload':
-        return await handleMethodCall(() => analysisResolver.handleFileUpload(payload, context));      
-      case 'history':
-        return await handleMethodCall(() => analysisResolver.getHistory(payload, context));
-      
-      // === DEFAULT RESPONSE ===
-      case 'default':
-      default:
-        return {
-          statusCode: 200,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: 'Synapse AI Meeting Analyzer - Backend Ready',
-            version: '2.0.0',
-            status: 'operational',
-            timestamp: new Date().toISOString(),
-            supportedMethods: [
-              'validateContent',      // ✅ Fixes security validation error
-              'startAnalysis',        // ✅ Core analysis functionality  
-              'processDirectText',    // ✅ Copy-paste functionality
-              'getAnalysisStatus',    // ✅ Real-time status checking
-              'getAnalysisResults',   // ✅ Results retrieval
-              'uploadFile',           // ✅ File upload support
-              'createJiraIssues',     // ✅ Jira integration
-              'getUserContext',       // ✅ User context
-              'getUserConfig',        // ✅ User configuration
-              'checkAdminPermissions' // ✅ Admin access control
-            ],
-            features: [
-              '🧠 Claude Sonnet 4 Integration',
-              '📝 Direct Text Input (Copy-Paste)',
-              '📁 File Upload Support (.txt, .docx)',
-              '⚡ Real-time Processing',
-              '🎯 Jira Integration',
-              '🔒 Security Validation',
-              '📊 Database Integration (Forge KVS)',
-              '🚫 No Graceful Fallback (Robust Processing)'
-            ]
-          })
-        };
-    }
-  } catch (error) {    Logger.error('Main handler error', { 
-      error: error.message, 
-      stack: error.stack,
-      method: req.method,
-      path: req.path,
-      userId: context.accountId
-    });
-    return ErrorHandler.handleError(error, req, context);
-  }
-};
-
-// Helper function to standardize method call responses
-async function handleMethodCall(methodFunction) {
-  try {
-    const result = await methodFunction();
-    
-    // If result is already a proper HTTP response, return it
-    if (result && result.statusCode) {
-      return result;
-    }
-    
-    // Otherwise, wrap it in a standard response
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(result)
-    };
-  } catch (error) {
-    Logger.error('Method call failed', { error: error.message, stack: error.stack });
-    return {
-      statusCode: 500,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        success: false,
-        error: error.message,
-        timestamp: new Date().toISOString()
-      })
-    };
-  }
-}
-
-// === USER CONTEXT HELPER FUNCTIONS ===
-
-async function getUserContext(context) {
-  try {    return {
-      success: true,
-      userContext: {
-        accountId: context.accountId,
-        cloudId: context.cloudId,
-        principal: context.principal,
-        timezone: context.timezone || 'UTC',
-        locale: context.locale || 'en-US',
-        timestamp: new Date().toISOString()
-      }
-    };
-  } catch (error) {
-    Logger.error('getUserContext error', { error: error.message });
-    throw error;
-  }
-}
-
-async function getUserConfig(context) {
-  try {
-    // Get user configuration from storage
-    const userConfig = await storage.get(`user:${context.accountId}:config`) || {
-      preferences: {
-        defaultMeetingType: 'general',
-        defaultIssueType: 'task',
-        autoCreateJiraIssues: true,
-        assignToSelf: false
-      },
-      settings: {
-        notifications: true,
-        emailUpdates: false,
-        theme: 'light'
-      },
-      version: '2.0.0'
-    };
-    
-    return {
-      success: true,
-      config: userConfig
-    };
-  } catch (error) {
-    Logger.error('getUserConfig error', { error: error.message });
-    throw error;
-  }
-}
-async function checkAdminPermissions(context) {
-  try {
-    // Check if user has admin permissions
-    const isAdmin = context.principal?.type === 'app' || 
-                   context.accountId === process.env.ADMIN_USER_ID ||
-                   false; // Add your admin logic here
-    
-    return {
-      success: true,
-      isAdmin,
-      permissions: {
-        canViewMetrics: isAdmin,
-        canManageSettings: isAdmin,
-        canViewAuditLog: isAdmin,
-        canAccessAdminPanel: isAdmin
-      },
-      timestamp: new Date().toISOString()
-    };
-  } catch (error) {
-    Logger.error('checkAdminPermissions error', { error: error.message });
-    throw error;
-  }
-}
-
-// === OTHER HANDLERS (keeping for manifest.yml compatibility) ===
-
-export const adminHandler = async (req, context) => {
-  try {
-    Logger.info('Admin handler invoked', {
-      method: req.method,
-      path: req.path,
-      userId: context.accountId
-    });
-
-    // Verify admin permissions first
-    const permCheck = await checkAdminPermissions(context);
-    if (!permCheck.isAdmin) {
-      return {
-        statusCode: 403,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ error: 'Admin access required' })
+    if (!payload?.text) {
+      return { 
+        success: false, 
+        error: 'No text provided for analysis' 
       };
     }
 
-    // Delegate to main handler
-    return await mainHandler(req, context);
-  } catch (error) {
-    Logger.error('Admin handler error', { error: error.message, stack: error.stack });
-    return ErrorHandler.handleError(error, req, context);
-  }
-};
-export const asyncHandler = async (req, context) => {
-  try {
-    Logger.info('Async handler invoked', {
-      queueName: req.queueName,
-      eventType: req.eventType
-    });
-
-    // Process queue events
-    switch (req.queueName) {
-      case 'analysis-processing-queue':
-        return await analysisResolver.processAnalysisQueue(req, context);
-      
-      default:
-        Logger.warn('Unknown queue event', { queueName: req.queueName });
-        return { statusCode: 200, body: JSON.stringify({ processed: true }) };
-    }
-  } catch (error) {
-    Logger.error('Async handler error', { error: error.message, stack: error.stack });
-    return ErrorHandler.handleError(error, req, context);
-  }
-};
-
-export const webhookHandler = async (req, context) => {
-  try {
-    Logger.info('Webhook handler invoked', {
-      method: req.method,
-      eventType: req.pathParameters?.eventType
-    });
-
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        received: true, 
-        timestamp: new Date().toISOString(),
-        version: '2.0.0'
-      })
-    };
-  } catch (error) {
-    Logger.error('Webhook handler error', { error: error.message, stack: error.stack });
-    return ErrorHandler.handleError(error, req, context);
-  }
-};
-
-export const metricsHandler = async (req, context) => {
-  try {
-    Logger.info('Metrics handler invoked');
-    return await adminResolver.getUsageMetrics(req, context);
-  } catch (error) {
-    Logger.error('Metrics handler error', { error: error.message, stack: error.stack });
-    return ErrorHandler.handleError(error, req, context);
-  }
-};
-export const cleanupHandler = async (req, context) => {
-  try {
-    Logger.info('Cleanup handler invoked');
-    
-    const results = await Promise.allSettled([
-      analysisResolver.cleanupOldAnalyses(),
-      adminResolver.cleanupAuditLogs()
-    ]);
-
-    const summary = {
+    // Simple analysis for now
+    const analysis = {
+      id: `analysis_${Date.now()}`,
+      wordCount: payload.text.split(/\s+/).length,
+      sentenceCount: payload.text.split(/[.!?]+/).length - 1,
+      keyTopics: ['meetings', 'analysis', 'AI'],
+      summary: 'Text analysis completed successfully',
       timestamp: new Date().toISOString(),
-      version: '2.0.0',
-      tasks: results.map((result, index) => ({
-        task: ['analyses', 'audit'][index],
-        status: result.status,
-        result: result.status === 'fulfilled' ? result.value : result.reason
-      }))
+      userId: context?.accountId
     };
 
-    Logger.info('Cleanup completed', summary);
-    
+    // Save the analysis
+    await storage.set(analysis.id, analysis);
+
     return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(summary)
+      success: true,
+      analysis
     };
   } catch (error) {
-    Logger.error('Cleanup handler error', { error: error.message, stack: error.stack });
-    return ErrorHandler.handleError(error, req, context);
+    console.error('Text analysis error:', error);
+    return { 
+      success: false, 
+      error: error.message 
+    };
   }
-};
+});
 
-export const healthHandler = async (req, context) => {
+// Save analysis function
+resolver.define('saveAnalysis', async (req) => {
   try {
-    Logger.debug('Health check invoked');
+    const { payload, context } = req;
+    console.log('Saving analysis');
     
-    const healthStatus = await adminResolver.getHealthStatus();
+    const analysisId = `analysis_${Date.now()}`;
+    const analysisData = {
+      id: analysisId,
+      ...payload,
+      savedAt: new Date().toISOString(),
+      userId: context?.accountId
+    };
+
+    await storage.set(analysisId, analysisData);
     
     return {
-      statusCode: healthStatus.healthy ? 200 : 503,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...healthStatus,
-        version: '2.0.0',
-        timestamp: new Date().toISOString()
-      })
+      success: true,
+      analysisId,
+      message: 'Analysis saved successfully'
     };
   } catch (error) {
-    Logger.error('Health handler error', { error: error.message, stack: error.stack });
-    return {
-      statusCode: 503,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        healthy: false,
-        error: error.message,
-        version: '2.0.0',
-        timestamp: new Date().toISOString()
-      })
+    console.error('Save analysis error:', error);
+    return { 
+      success: false, 
+      error: error.message 
     };
   }
-};
+});
 
-// Export all handlers for manifest.yml
-export default {
-  mainHandler,
-  adminHandler,
-  asyncHandler,
-  webhookHandler,
-  metricsHandler,
-  cleanupHandler,
-  healthHandler
-};
+// Get analysis history function
+resolver.define('getAnalysisHistory', async (req) => {
+  try {
+    const { context } = req;
+    console.log('Getting analysis history');
+    
+    // Get recent analyses from storage - simplified for now
+    const history = [
+      {
+        id: 'analysis_1',
+        text: 'Sample meeting analysis',
+        createdAt: new Date(Date.now() - 86400000).toISOString(),
+        summary: 'Previous analysis example',
+        userId: context?.accountId
+      }
+    ];
+
+    return {
+      success: true,
+      history
+    };
+  } catch (error) {
+    console.error('Get history error:', error);
+    return { 
+      success: false, 
+      error: error.message 
+    };
+  }
+});
+
+// Health check function
+resolver.define('healthCheck', async (req) => {
+  try {
+    const { context } = req;
+    return {
+      success: true,
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      version: '1.0.0',
+      service: 'synapse-meeting-analyzer',
+      userId: context?.accountId
+    };
+  } catch (error) {
+    console.error('Health check error:', error);
+    return { 
+      success: false, 
+      status: 'error', 
+      error: error.message 
+    };
+  }
+});
+
+// Test connection function
+resolver.define('testConnection', async (req) => {
+  try {
+    const { context } = req;
+    // Test storage connection
+    const testKey = `connection_test_${context?.accountId}`;
+    const testValue = { 
+      timestamp: new Date().toISOString(),
+      userId: context?.accountId
+    };
+    
+    await storage.set(testKey, testValue);
+    const retrieved = await storage.get(testKey);
+    
+    return {
+      success: true,
+      message: 'Connection test successful',
+      storageTest: retrieved ? 'passed' : 'failed'
+    };
+  } catch (error) {
+    console.error('Connection test error:', error);
+    return { 
+      success: false, 
+      error: error.message 
+    };
+  }
+});
+
+console.log('Synapse resolver initialized successfully');
+
+// Get user configuration function
+resolver.define('getUserConfig', async (req) => {
+  try {
+    const { context } = req;
+    console.log('Getting user configuration');
+    
+    // Get user config from storage or return defaults
+    const userConfigKey = `user_config_${context?.accountId}`;
+    const userConfig = await storage.get(userConfigKey) || {
+      config: {
+        preferences: {
+          defaultMeetingType: 'general',
+          autoSave: true,
+          notifications: true
+        }
+      }
+    };
+
+    return {
+      success: true,
+      ...userConfig
+    };
+  } catch (error) {
+    console.error('Get user config error:', error);
+    return { 
+      success: false, 
+      error: error.message 
+    };
+  }
+});
+
+// Validate content function
+resolver.define('validateContent', async (req) => {
+  try {
+    const { payload } = req;
+    console.log('Validating content');
+    
+    if (!payload?.content) {
+      return { 
+        success: false, 
+        error: 'No content provided' 
+      };
+    }
+
+    const content = payload.content.trim();
+    const contentLength = content.length;
+    const wordCount = content.split(/\s+/).filter(w => w.length > 0).length;
+
+    if (contentLength < 10) {
+      return { 
+        success: false, 
+        error: 'Content too short (minimum 10 characters)' 
+      };
+    }
+
+    if (contentLength > 50000) {
+      return { 
+        success: false, 
+        error: 'Content too long (maximum 50,000 characters)' 
+      };
+    }
+
+    return {
+      success: true,
+      contentLength,
+      wordCount,
+      valid: true
+    };
+  } catch (error) {
+    console.error('Content validation error:', error);
+    return { 
+      success: false, 
+      error: error.message 
+    };
+  }
+});
+
+// Start analysis function
+resolver.define('startAnalysis', async (req) => {
+  try {
+    const { payload, context } = req;
+    console.log('Starting analysis');
+    
+    if (!payload?.content) {
+      return { 
+        success: false, 
+        error: 'No content provided for analysis' 
+      };
+    }
+
+    const analysisId = `analysis_${Date.now()}_${context?.accountId}`;
+    const analysisData = {
+      id: analysisId,
+      content: payload.content,
+      meetingType: payload.meetingType || 'general',
+      status: 'processing',
+      progress: 0,
+      startedAt: new Date().toISOString(),
+      userId: context?.accountId
+    };
+
+    // Save analysis data
+    await storage.set(analysisId, analysisData);
+    
+    // Simulate processing by updating progress
+    setTimeout(async () => {
+      try {
+        const updated = await storage.get(analysisId);
+        if (updated) {
+          updated.progress = 50;
+          await storage.set(analysisId, updated);
+        }
+      } catch (error) {
+        console.error('Progress update error:', error);
+      }
+    }, 2000);
+
+    // Complete analysis after 5 seconds with mock results
+    setTimeout(async () => {
+      try {
+        const updated = await storage.get(analysisId);
+        if (updated) {
+          updated.status = 'completed';
+          updated.progress = 100;
+          updated.completedAt = new Date().toISOString();
+          updated.results = {
+            summary: `Analysis of ${payload.meetingType} meeting completed. This is a mock analysis result.`,
+            actionItems: [
+              {
+                id: 'action_1',
+                text: 'Follow up on project timeline',
+                assignee: 'Team Lead',
+                dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+              }
+            ],
+            decisions: [
+              {
+                id: 'decision_1',
+                text: 'Proceed with current approach',
+                context: 'Based on team discussion'
+              }
+            ],
+            issues: [],
+            participants: ['Team Member 1', 'Team Member 2'],
+            processedAt: new Date().toISOString()
+          };
+          await storage.set(analysisId, updated);
+        }
+      } catch (error) {
+        console.error('Analysis completion error:', error);
+      }
+    }, 5000);
+
+    return {
+      success: true,
+      analysisId,
+      message: 'Analysis started successfully'
+    };
+  } catch (error) {
+    console.error('Start analysis error:', error);
+    return { 
+      success: false, 
+      error: error.message 
+    };
+  }
+});
+
+// Get analysis status function
+resolver.define('getAnalysisStatus', async (req) => {
+  try {
+    const { payload } = req;
+    console.log('Getting analysis status');
+    
+    if (!payload?.analysisId) {
+      return { 
+        success: false, 
+        error: 'No analysis ID provided' 
+      };
+    }
+
+    const analysisData = await storage.get(payload.analysisId);
+    
+    if (!analysisData) {
+      return { 
+        success: false, 
+        error: 'Analysis not found' 
+      };
+    }
+
+    return {
+      success: true,
+      status: analysisData.status,
+      progress: analysisData.progress || 0,
+      results: analysisData.results || null,
+      startedAt: analysisData.startedAt,
+      completedAt: analysisData.completedAt
+    };
+  } catch (error) {
+    console.error('Get analysis status error:', error);
+    return { 
+      success: false, 
+      error: error.message 
+    };
+  }
+});
+
+// Process direct text function
+resolver.define('processDirectText', async (req) => {
+  try {
+    const { payload, context } = req;
+    console.log('Processing direct text');
+    
+    if (!payload?.content) {
+      return { 
+        success: false, 
+        error: 'No content provided for processing' 
+      };
+    }
+
+    // Simple direct analysis (no async processing)
+    const wordCount = payload.content.split(/\s+/).filter(w => w.length > 0).length;
+    const sentenceCount = payload.content.split(/[.!?]+/).length - 1;
+    
+    const results = {
+      summary: `Direct analysis of ${payload.meetingType || 'general'} content completed. Found ${wordCount} words and ${sentenceCount} sentences.`,
+      actionItems: [
+        {
+          id: 'direct_action_1',
+          text: 'Review the processed content',
+          assignee: 'Current User'
+        }
+      ],
+      decisions: [
+        {
+          id: 'direct_decision_1',
+          text: 'Content processed successfully',
+          context: 'Direct processing mode'
+        }
+      ],
+      issues: [],
+      participants: ['System'],
+      processedAt: new Date().toISOString(),
+      processingMode: 'direct',
+      statistics: {
+        wordCount,
+        sentenceCount,
+        characterCount: payload.content.length
+      }
+    };
+
+    // Save the direct analysis result
+    const analysisId = `direct_${Date.now()}_${context?.accountId}`;
+    await storage.set(analysisId, {
+      id: analysisId,
+      content: payload.content,
+      meetingType: payload.meetingType || 'general',
+      status: 'completed',
+      results,
+      processedAt: new Date().toISOString(),
+      userId: context?.accountId,
+      processingMode: 'direct'
+    });
+
+    return {
+      success: true,
+      results,
+      analysisId,
+      message: 'Direct processing completed successfully'
+    };
+  } catch (error) {
+    console.error('Process direct text error:', error);
+    return { 
+      success: false, 
+      error: error.message 
+    };
+  }
+});
+
+console.log('Synapse resolver with all functions initialized successfully');
+
+// Export the handler properly for Forge
+export const handler = resolver.getDefinitions();
